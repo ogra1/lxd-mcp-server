@@ -42,6 +42,14 @@ base: core26
 grade: stable
 confinement: strict
 
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
+
 apps:
   lxd-mcp-server:
     command: bin/mcp-bridge
