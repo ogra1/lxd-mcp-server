@@ -9,6 +9,7 @@
   So that the bridge can actually talk to your lxd instance.
 
   The MCP server provides 9 tools to your LLM that you can use:
+  
     - list_containers (lists existing containers)
     - create_container (creates a new container, with <name> and <release>)
     - start_container (fires up the named container)
@@ -19,6 +20,7 @@
     - limit_resources (allows to limit ram and cpu usage for a container)
 
   There are also two config options you can use with snap set:
+  
     - port (defaults to 8005)
     - debug (defaults ot being off)
 
