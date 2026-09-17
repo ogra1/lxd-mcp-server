@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""
+MCP Server for LXD Container Management using pylxd
+This server bridges between an LLM and LXD containers on the same host.
+"""
+
+import asyncio
+import json
+import logging
+import subprocess
+import sys
+import os
+import io
+import tarfile
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, asdict
+
+# prevent pylxd to print a warning on startup for a feature 
+# that is only available in unstable pylxd yet (requestor)
+os.environ["PYLXD_WARNINGS"] = "none"
+
+# Import pylxd for better snap compatibility
+import pylxd
+from pylxd import Client
+
+# === 1. MCP IMPORTS ===
+from mcp.server import MCPServer
+from mcp.server.stdio import stdio_server
+import mcp.types as types
+
+# Configure logging (Umleitung auf stderr, um stdout frei zu halten)
+logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+logger = logging.getLogger(__name__)
+
+# Custom handler to capture all messages
+class DebugHandler(logging.Handler):
+    def emit(self, record):
+        # This will make sure our debug output goes to stderr where it can be seen
+        print(f"DEBUG: {record.levelname}: {record.getMessage()}", file=sys.stderr, flush=True)
+
+# Add the debug handler to make sure logs are visible
+logger.addHandler(DebugHandler())
+logger.setLevel(logging.WARNING)
+
+# Global debug flag that can be set from configuration
+DEBUG_MODE = False
+
+def setup_logging(debug_mode=False):
+    """Setup logging based on debug configuration"""
+    global logger, DEBUG_MODE
+    
+    DEBUG_MODE = debug_mode
+    
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+        # Set all loggers to debug level if needed
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.WARNING)
+        # Set all loggers to warning level to reduce spam
+        logging.getLogger().setLevel(logging.WARNING)
+
+def get_debug_mode_from_config():
+    """Get debug mode from snap configuration"""
+    try:
+        # Try to get debug setting from snap config
+        import subprocess
+        result = subprocess.run(['snapctl', 'get', 'debug'], 
+                              capture_output=True, text=True, check=True)
+        debug_str = result.stdout.strip()
+        return debug_str.lower() in ('true', '1', 'yes', 'on')
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # If snapctl is not available or config not set, default to False
+        return False
+
+@dataclass
+class ContainerInfo:
+    """Represents information about an LXD container"""
+    name: str
+    status: str
+    ipv4: str
+    ipv6: str
+    architecture: str
+    created: str
+    updated: str
+
+class LXDManager:
+    """Manages LXD containers using pylxd"""
+    
+    def __init__(self):
+        self.client = Client()
+        self.lxd_available = self._check_lxd()
+        if not self.lxd_available:
+            raise RuntimeError("LXD is not available on this system")
+    
+    def _check_lxd(self) -> bool:
+        """Check if LXD is available"""
+        try:
+            # Try to access LXD API
+            self.client.api.get()
+            logger.debug("LXD API connection successful")
+            return True
+        except Exception as e:
+            logger.error(f"LXD API connection failed: {e}")
+            return False
+    
+    def list_containers(self) -> List[ContainerInfo]:
+        """List all LXD containers"""
+        logger.debug("Starting list_containers")
+        try:
+            containers = []
+            # Get all containers with their current state
+            container_list = list(self.client.containers.all())
+            logger.debug(f"Found {len(container_list)} containers")
+            
+            for i, container in enumerate(container_list):
+                logger.debug(f"Processing container {i}: {container.name}")
+                try:
+                    # Simple and direct access to container properties
+                    container_info = ContainerInfo(
+                        name=str(container.name),
+                        status=str(container.status) if hasattr(container, 'status') else 'Unknown',
+                        ipv4=str(container.ipv4) if hasattr(container, 'ipv4') else '',
+                        ipv6=str(container.ipv6) if hasattr(container, 'ipv6') else '',
+                        architecture=str(container.architecture) if hasattr(container, 'architecture') else '',
+                        created=str(container.created_at) if hasattr(container, 'created_at') else '',
+                        updated=str(container.updated_at) if hasattr(container, 'updated_at') else ''
+                    )
+                    containers.append(container_info)
+                    logger.debug(f"Added container {container.name} with status {container_info.status}")
+                except Exception as e:
+                    logger.error(f"Error accessing container info for {container.name}: {e}")
+                    # Fallback - return minimal container info
+                    fallback_info = ContainerInfo(
+                        name=str(container.name),
+                        status='Unknown',
+                        ipv4='',
+                        ipv6='',
+                        architecture='',
+                        created='',
+                        updated=''
+                    )
+                    containers.append(fallback_info)
+                    logger.debug(f"Added fallback container {container.name}")
+            
+            logger.debug(f"Successfully processed {len(containers)} containers")
+            return containers
+        except Exception as e:
+            logger.error(f"Error in list_containers: {e}")
+            return []
+    
+    def create_container(self, name: str, image: str = "ubuntu:26.04") -> bool:
+        """Create a new LXD container"""
+        logger.debug(f"Creating container {name}")
+
+        try:
+            # Convert image alias format if needed
+            converted_image = image.split(":")[1] if ":" in image else image
+
+            # Use the correct pylxd source configuration format
+            config = {
+                'name': name,
+                'source': {
+                    'type': 'image',
+                    'mode': 'pull',
+                    'server': 'https://cloud-images.ubuntu.com/releases',
+                    'protocol': 'simplestreams',
+                    'alias': converted_image
+                }
+            }
+
+            container = self.client.containers.create(config, wait=True)
+            logger.debug(f"Container {name} created successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating container {name}: {e}")
+            return False
+
+    def start_container(self, name: str) -> bool:
+        """Start an LXD container"""
+        logger.debug(f"Starting container {name}")
+        try:
+            container = self.client.containers.get(name)
+            container.start(wait=True)
+            logger.debug(f"Container {name} started successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error starting container {name}: {e}")
+            return False
+
+# === 3. SERVER INITIALISIERUNG & TOOLS ===
+server = MCPServer("lxd-mcp-server")
+lxd_manager = LXDManager()
+
+def stop_container_cmd(name: str) -> bool:
+    logger.debug(f"Stopping container {name}")
+    try:
+        container = lxd_manager.client.containers.get(name)
+        container.stop(wait=True)
+        logger.debug(f"Container {name} stopped successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error stopping container {name}: {e}")
+        return False
+
+def delete_container_cmd(name: str) -> bool:
+    logger.debug(f"Deleting container {name}")
+    try:
+        container = lxd_manager.client.containers.get(name)
+        container.delete(wait=True)
+        logger.debug(f"Container {name} deleted successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting container {name}: {e}")
+        return False
+
+def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
+    logger.debug(f"Executing command '{command}' on container {name}")
+    try:
+        container = lxd_manager.client.containers.get(name)
+        # Split the command into a list of arguments
+        command_list = command.split()
+        result = container.execute(command_list)
+        logger.debug(f"Command executed successfully with exit code {result.exit_code}")
+        return result.exit_code, result.stdout + result.stderr
+    except Exception as e:
+        logger.error(f"Error executing command in {name}: {e}")
+        return -1, str(e)
+
+def push_file_cmd(container_name: str, file_content: str, container_path: str) -> bool:
+    logger.debug(f"Pushing file to {container_name}:{container_path}")
+    try:
+        container = lxd_manager.client.containers.get(container_name)
+
+        # Create tar archive in memory with compression to save RAM
+        tar_stream = io.BytesIO()
+        content_bytes = file_content.encode('utf-8')
+
+        # Create compressed tar archive (gzip)
+        with tarfile.open(fileobj=tar_stream, mode='w:gz') as tar:
+            tarinfo = tarfile.TarInfo(name=os.path.basename(container_path))
+            tarinfo.size = len(content_bytes)
+            tarinfo.mode = 0o755  # Make executable like original
+            tar.addfile(tarinfo, io.BytesIO(content_bytes))
+
+        tar_bytes = tar_stream.getvalue()
+
+        # Create directory structure if needed
+        container_dir = os.path.dirname(container_path)
+        if container_dir and container_dir != "/":
+            mkdir_cmd = f"mkdir -p '{container_dir}'"
+            result = container.execute(["sh", "-c", mkdir_cmd])
+            if result.exit_code != 0:
+                logger.error(f"Failed to create directory {container_dir}: {result.stderr}")
+                return False
+
+        # Stream compressed tar data directly to container's tar command
+        def tar_stream_generator():
+            yield tar_bytes
+
+        # Use the stdin_payload parameter to stream directly to tar command with gzip decompression
+        exit_code, stdout, stderr = container.execute(
+            commands=["tar", "-xzf", "-", "-C", container_dir],  # Use -xzf for gzip decompression
+            stdin_payload=tar_stream_generator(),
+            decode=True
+        )
+
+        if exit_code != 0:
+            logger.error(f"Failed to extract tar archive: {stderr}")
+            return False
+
+        logger.debug(f"File pushed successfully to {container_name}:{container_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Error pushing file to {container_name}: {e}")
+        return False
+
+def pull_file_cmd(container_name: str, container_path: str, host_path: str) -> bool:
+    logger.debug(f"Pulling file from {container_name}:{container_path} to {host_path}")
+    try:
+        container = lxd_manager.client.containers.get(container_name)
+        # Get file content from container
+        file_content = container.files.get(container_path)
+        # Write to local file
+        with open(host_path, 'wb') as f:
+            f.write(file_content)
+        logger.debug(f"File pulled successfully from {container_name}:{container_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Error pulling file from {container_name}: {e}")
+        return False
+
+def limit_resources_cmd(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
+    logger.debug(f"Setting resource limits for {container_name}")
+    try:
+        container = lxd_manager.client.containers.get(container_name)
+        config = container.config
+        
+        if cpu:
+            config['limits.cpu'] = cpu
+        if memory:
+            config['limits.memory'] = memory
+            
+        container.update(config=config, wait=True)
+        result = f"Ressourcen limits für {container_name} aktualisiert"
+        logger.debug(f"Resource limits set successfully for {container_name}")
+        return result
+    except Exception as e:
+        logger.error(f"Error limiting resources for {container_name}: {e}")
+        return f"Fehler beim Setzen der Ressourcen-Limits: {e}"
+
+@server.tool()
+def list_containers() -> str:
+    """Listet alle verfuegbaren LXD-Container und deren Status auf."""
+    logger.debug("list_containers called")
+    try:
+        containers = lxd_manager.list_containers()
+        logger.debug(f"list_containers returning {len(containers)} containers")
+        
+        if not containers:
+            result = "Containers: 0 gefunden"
+            logger.debug(f"Returning empty result: {result}")
+            return result
+        
+        # Create a simple formatted string to make sure it's compatible
+        result = f"Containers: {len(containers)} gefunden\n"
+        for container in containers:
+            result += f"  - {container.name} ({container.status})\n"
+        result = result.strip()
+        logger.debug(f"list_containers returning: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Error in list_containers: {e}")
+        return f"Error listing containers: {e}"
+
+@server.tool()
+def create_container(name: str, image: str = "ubuntu:22.04") -> str:
+    """Erstellt einen neuen LXD-Container mit einem Namen und optionalem Image."""
+    logger.debug(f"create_container called for {name}")
+    success = lxd_manager.create_container(name, image)
+    result = f"Container '{name}' erfolgreich erstellt." if success else f"Fehler beim Erstellen von '{name}'."
+    logger.debug(f"create_container returning: {result}")
+    return result
+
+@server.tool()
+def start_container(name: str) -> str:
+    """Startet einen gestoppten LXD-Container ueber seinen Namen."""
+    logger.debug(f"start_container called for {name}")
+    success = lxd_manager.start_container(name)
+    result = f"Container '{name}' gestartet." if success else f"Fehler beim Starten von '{name}'."
+    logger.debug(f"start_container returning: {result}")
+    return result
+
+@server.tool()
+def stop_container(name: str) -> str:
+    """Stoppt einen laufenden LXD-Container sauber ueber seinen Namen."""
+    logger.debug(f"stop_container called for {name}")
+    success = stop_container_cmd(name)
+    result = f"Container '{name}' wurde erfolgreich gestoppt." if success else f"Fehler beim Stoppen von '{name}'."
+    logger.debug(f"stop_container returning: {result}")
+    return result
+
+@server.tool()
+def delete_container(name: str) -> str:
+    """Loescht einen LXD-Container unwiderruflich vom Host (erzwingt den Stopp, falls er laeuft)."""
+    logger.debug(f"delete_container called for {name}")
+    success = delete_container_cmd(name)
+    result = f"Container '{name}' wurde erfolgreich gelöscht." if success else f"Fehler beim Löschen von '{name}'."
+    logger.debug(f"delete_container returning: {result}")
+    return result
+
+@server.tool()
+def execute_command(name: str, command: str) -> str:
+    """Fuehrt einen Linux-Befehl direkt innerhalb des angegebenen Containers aus und gibt das Terminal-Output zurück."""
+    logger.debug(f"execute_command called for {name} with command '{command}'")
+    returncode, output = execute_command_cmd(name, command)
+    result = f"Befehl ausgeführt (Exit Code: {returncode}).\nOutput:\n{output}"
+    logger.debug(f"execute_command returning: {result}")
+    return result
+
+@server.tool()
+def push_file(container_name: str, file_content: str, container_path: str) -> str:
+    """Schreibt einen Text- oder Skriptinhalt direkt in eine Datei innerhalb des LXD-Containers via Tar-Streaming.
+    
+    Die Datei wird im Container automatisch als ausfuehrbar (chmod +x / 0755) markiert.
+    
+    Args:
+        container_name: Name des Zielcontainers.
+        file_content: Der eigentliche Inhalt, der in die Datei geschrieben werden soll.
+        container_path: Der absolute Zielpfad im Container (z.B. '/tmp/script.sh').
+    """
+    logger.debug(f"push_file called for {container_name}:{container_path}")
+    success = push_file_cmd(container_name, file_content, container_path)
+    result = f"Datei erfolgreich via Tar-Pipeline nach '{container_name}:{container_path}' uebertragen und ausfuehrbar gemacht." if success else f"Fehler beim Uebertragen der Tar-Daten."
+    logger.debug(f"push_file returning: {result}")
+    return result
+
+@server.tool()
+def pull_file(container_name: str, container_path: str, host_path: str) -> str:
+    """Kopiert/Holt eine Datei aus dem angegebenen LXD-Container heraus auf das lokale Host-System."""
+    logger.debug(f"pull_file called for {container_name}:{container_path} to {host_path}")
+    success = pull_file_cmd(container_name, container_path, host_path)
+    result = f"Datei '{container_name}:{container_path}' erfolgreich nach '{host_path}' kopiert." if success else f"Fehler beim Kopieren der Datei aus dem Container."
+    logger.debug(f"pull_file returning: {result}")
+    return result
+
+@server.tool()
+def limit_resources(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
+    """Begrenzt die CPU-Kerne (z.B. '2') und den RAM (z.B. '2GB' oder '512MB') eines LXD-Containers. Gibt an, was geaendert wurde."""
+    logger.debug(f"limit_resources called for {container_name}")
+    result = limit_resources_cmd(container_name, cpu, memory)
+    logger.debug(f"limit_resources returning: {result}")
+    return result
+
+# === 4. SERVER START ROUTINE ===
+def main():
+    # Check for debug mode from configuration
+    debug_mode = get_debug_mode_from_config()
+    setup_logging(debug_mode)
+    
+    # Startet automatisch den unbuffered Stdio-Transport des SDK v2 
+    # und regelt das Event-Loop-Handling komplett fehlerfrei von selbst.
+    logger.debug("Starting MCP server")
+    
+    # Also let's add some direct JSON reading to see what's coming in
+    logger.debug("Server starting - ready to receive JSON-RPC messages...")
+    
+    # This is the key - let's override the default behavior to add very explicit logging
+    # of input messages
+    server.run(transport="stdio")
+
+if __name__ == "__main__":
+    main()
+

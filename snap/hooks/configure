@@ -1,0 +1,24 @@
+#! /bin/sh
+
+PORT=$(snapctl get port)
+
+# set default
+if [ -z "$PORT" ]; then
+    PORT=8005
+    snapctl set port=$PORT
+fi
+
+# make sure the config file exists
+if [ ! -e "$SNAP_DATA"/config.json ]; then
+    cat << EOF > "$SNAP_DATA"/config.json
+{
+  "port": "$PORT"
+}
+EOF
+else 
+    # update config
+    sed -i "s/\"port\".*/\"port\": \"$PORT\"/" "$SNAP_DATA"/config.json
+fi
+
+# restart to apply new config
+snapctl restart $SNAP_NAME.lxd-mcp-server
