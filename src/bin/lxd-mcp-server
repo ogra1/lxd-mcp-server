@@ -219,7 +219,7 @@ def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
     try:
         container = lxd_manager.client.containers.get(name)
         # Split the command into a list of arguments
-        command_list = command.split()
+        command_list = ["/bin/bash", "-c", command ]
         result = container.execute(command_list)
         logger.debug(f"Command executed successfully with exit code {result.exit_code}")
         return result.exit_code, result.stdout + result.stderr
