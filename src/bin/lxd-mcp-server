@@ -65,7 +65,7 @@ def get_debug_mode_from_config():
     try:
         # Try to get debug setting from snap config
         import subprocess
-        result = subprocess.run(['snapctl', 'get', 'debug'], 
+        result = subprocess.run(['snapctl', 'get', 'debug'],
                               capture_output=True, text=True, check=True)
         debug_str = result.stdout.strip()
         return debug_str.lower() in ('true', '1', 'yes', 'on')
@@ -86,13 +86,13 @@ class ContainerInfo:
 
 class LXDManager:
     """Manages LXD containers using pylxd"""
-    
+
     def __init__(self):
         self.client = Client()
         self.lxd_available = self._check_lxd()
         if not self.lxd_available:
             raise RuntimeError("LXD is not available on this system")
-    
+
     def _check_lxd(self) -> bool:
         """Check if LXD is available"""
         try:
@@ -103,7 +103,7 @@ class LXDManager:
         except Exception as e:
             logger.error(f"LXD API connection failed: {e}")
             return False
-    
+
     def list_containers(self) -> List[ContainerInfo]:
         """List all LXD containers"""
         logger.debug("Starting list_containers")
@@ -112,7 +112,7 @@ class LXDManager:
             # Get all containers with their current state
             container_list = list(self.client.containers.all())
             logger.debug(f"Found {len(container_list)} containers")
-            
+
             for i, container in enumerate(container_list):
                 logger.debug(f"Processing container {i}: {container.name}")
                 try:
@@ -142,13 +142,13 @@ class LXDManager:
                     )
                     containers.append(fallback_info)
                     logger.debug(f"Added fallback container {container.name}")
-            
+
             logger.debug(f"Successfully processed {len(containers)} containers")
             return containers
         except Exception as e:
             logger.error(f"Error in list_containers: {e}")
             return []
-    
+
     def create_container(self, name: str, image: str = "ubuntu:26.04") -> bool:
         """Create a new LXD container"""
         logger.debug(f"Creating container {name}")
@@ -227,45 +227,43 @@ async def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
         logger.error(f"Error executing command in {name}: {e}")
         return -1, str(e)
 
-async def push_file_cmd(container_name: str, file_content: str, container_path: str) -> bool:
-    logger.debug(f"Pushing file to {container_name}:{container_path}")
+async def push_file_cmd(container_name: str, local_source_path: str, container_dest_path: str) -> bool:
+    logger.debug(f"Pushing file to {container_name}:{container_dest_path}")
     try:
         container = lxd_manager.client.containers.get(container_name)
 
-        # Create tar archive in memory with compression to save RAM
-        tar_stream = io.BytesIO()
-        content_bytes = file_content.encode('utf-8')
+        # Normalize the path
+        local_source_path = os.path.normpath(local_source_path)
+        parent_dir = os.path.dirname(local_source_path)
+        target_name = os.path.basename(local_source_path)
 
-        # Create compressed tar archive (gzip)
-        with tarfile.open(fileobj=tar_stream, mode='w:gz') as tar:
-            tarinfo = tarfile.TarInfo(name=os.path.basename(container_path))
-            tarinfo.size = len(content_bytes)
-            tarinfo.mode = 0o755  # Make executable like original
-            tar.addfile(tarinfo, io.BytesIO(content_bytes))
+        # --- NEW: Ensure the destination directory exists inside the container ---
+        # 'mkdir -p' will safely create the full path or do nothing if it already exists
+        mkdir_result = container.execute(["mkdir", "-p", container_dest_path])
+        if mkdir_result.exit_code != 0:
+            logger.error(f"Failed to create destination directory in container: {mkdir_result.stderr}")
+            return false
 
-        tar_bytes = tar_stream.getvalue()
+        # Dynamic Command Assembly
+        if os.path.isdir(local_source_path):
+            local_tar_cmd = ["tar", "-czf", "-", "-C", local_source_path, "."]
+        else:
+            local_tar_cmd = ["tar", "-czf", "-", "-C", parent_dir, target_name]
 
-        # Create directory structure if needed
-        container_dir = os.path.dirname(container_path)
-        if container_dir and container_dir != "/":
-            mkdir_cmd = f"mkdir -p '{container_dir}'"
-            result = container.execute(["sh", "-c", mkdir_cmd])
-            if result.exit_code != 0:
-                logger.error(f"Failed to create directory {container_dir}: {result.stderr}")
-                return False
+        container_tar_cmd = ["tar", "-xzf", "-", "-C", container_dest_path]
 
-        # Stream compressed tar data directly to container's tar command
-        def tar_stream_generator():
-            yield tar_bytes
+        # Execute the stream
+        local_process = subprocess.Popen(local_tar_cmd, stdout=subprocess.PIPE)
 
-        # Use the stdin_payload parameter to stream directly to tar command with gzip decompression
-        exit_code, stdout, stderr = container.execute(
-            commands=["tar", "-xzf", "-", "-C", container_dir],  # Use -xzf for gzip decompression
-            stdin_payload=tar_stream_generator(),
-            decode=True
+        print(f"Streaming {target_name} to container:{container_dest_path}...")
+        result = container.execute(
+            commands=container_tar_cmd,
+            stdin_payload=local_process.stdout
         )
 
-        if exit_code != 0:
+        local_process.wait()
+
+        if result.exit_code != 0:
             logger.error(f"Failed to extract tar archive: {stderr}")
             return False
 
@@ -295,12 +293,12 @@ async def limit_resources_cmd(container_name: str, cpu: Optional[str] = None, me
     try:
         container = lxd_manager.client.containers.get(container_name)
         config = container.config
-        
+
         if cpu:
             config['limits.cpu'] = cpu
         if memory:
             config['limits.memory'] = memory
-            
+
         container.update(config=config, wait=True)
         result = f"Ressourcen limits für {container_name} aktualisiert"
         logger.debug(f"Resource limits set successfully for {container_name}")
@@ -316,12 +314,12 @@ async def list_containers() -> str:
     try:
         containers = lxd_manager.list_containers()
         logger.debug(f"list_containers returning {len(containers)} containers")
-        
+
         if not containers:
             result = "Containers: 0 gefunden"
             logger.debug(f"Returning empty result: {result}")
             return result
-        
+
         # Create a simple formatted string to make sure it's compatible
         result = f"Containers: {len(containers)} gefunden\n"
         for container in containers:
@@ -370,7 +368,7 @@ async def delete_container(name: str) -> str:
     return result
 
 @server.tool()
-async def execute_command(name: str, command: str) -> str:
+async def run_in_container(name: str, command: str) -> str:
     """Fuehrt einen Linux-Befehl direkt innerhalb des angegebenen Containers aus und gibt das Terminal-Output zurück."""
     logger.debug(f"execute_command called for {name} with command '{command}'")
     returncode, output = await execute_command_cmd(name, command)
@@ -379,24 +377,21 @@ async def execute_command(name: str, command: str) -> str:
     return result
 
 @server.tool()
-async def push_file(container_name: str, file_content: str, container_path: str) -> str:
-    """Schreibt einen Text- oder Skriptinhalt direkt in eine Datei innerhalb des LXD-Containers via Tar-Streaming.
-    
-    Die Datei wird im Container automatisch als ausfuehrbar (chmod +x / 0755) markiert.
-    
+async def push_to_container(container_name: str, local_source_path: str, container_dest_path: str) -> str:
+    """Shiebt eine Datei in den LXD-Container via Tar-Streaming.
     Args:
         container_name: Name des Zielcontainers.
-        file_content: Der eigentliche Inhalt, der in die Datei geschrieben werden soll.
-        container_path: Der absolute Zielpfad im Container (z.B. '/tmp/script.sh').
+        local_source_path: Pfad zu lokaler dataei oder directory
+        container_dest_path: Zielpfad im container
     """
-    logger.debug(f"push_file called for {container_name}:{container_path}")
-    success = await push_file_cmd(container_name, file_content, container_path)
-    result = f"Datei erfolgreich via Tar-Pipeline nach '{container_name}:{container_path}' uebertragen und ausfuehrbar gemacht." if success else f"Fehler beim Uebertragen der Tar-Daten."
+    logger.debug(f"push_file called for {container_name}:{container_dest_path}")
+    success = await push_file_cmd(container_name, local_source_path, container_dest_path)
+    result = f"Datei erfolgreich via Tar-Pipeline nach '{container_name}:{container_dest_path}' uebertragen und ausfuehrbar gemacht." if success else f"Fehler beim Uebertragen der Tar-Daten."
     logger.debug(f"push_file returning: {result}")
     return result
 
 @server.tool()
-async def pull_file(container_name: str, container_path: str, host_path: str) -> str:
+async def pull_from_container(container_name: str, container_path: str, host_path: str) -> str:
     """Kopiert/Holt eine Datei aus dem angegebenen LXD-Container heraus auf das lokale Host-System."""
     logger.debug(f"pull_file called for {container_name}:{container_path} to {host_path}")
     success = await pull_file_cmd(container_name, container_path, host_path)
@@ -405,7 +400,7 @@ async def pull_file(container_name: str, container_path: str, host_path: str) ->
     return result
 
 @server.tool()
-async def limit_resources(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
+async def limit_container_resources(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
     """Begrenzt die CPU-Kerne (z.B. '2') und den RAM (z.B. '2GB' oder '512MB') eines LXD-Containers. Gibt an, was geaendert wurde."""
     logger.debug(f"limit_resources called for {container_name}")
     result = await limit_resources_cmd(container_name, cpu, memory)
