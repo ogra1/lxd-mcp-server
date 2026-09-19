@@ -12,6 +12,7 @@ import sys
 import os
 import io
 import tarfile
+import time
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
 
@@ -227,50 +228,57 @@ async def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
         logger.error(f"Error executing command in {name}: {e}")
         return -1, str(e)
 
-async def push_file_cmd(container_name: str, local_source_path: str, container_dest_path: str) -> bool:
-    logger.debug(f"Pushing file to {container_name}:{container_dest_path}")
+async def push_file_cmd(container_name: str, files: list[dict], target_dir: str = "/root") -> bool:
+    logger.debug(f"Pushing multiple files via tar-stream to container {container_name}")
     try:
         container = lxd_manager.client.containers.get(container_name)
 
-        # Normalize the path
-        local_source_path = os.path.normpath(local_source_path)
-        parent_dir = os.path.dirname(local_source_path)
-        target_name = os.path.basename(local_source_path)
+        # Tar-Archiv im Arbeitsspeicher (RAM) erstellen
+        tar_stream = io.BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode='w:gz') as tar:
+            for f in files:
+                # Unterscheidung zwischen Text und Base64-Binärdaten
+                if f.get("is_base64", False):
+                    file_bytes = base64.b64decode(f["content"])
+                else:
+                    file_bytes = f["content"].encode('utf-8')
 
-        # --- NEW: Ensure the destination directory exists inside the container ---
-        # 'mkdir -p' will safely create the full path or do nothing if it already exists
-        mkdir_result = container.execute(["mkdir", "-p", container_dest_path])
-        if mkdir_result.exit_code != 0:
-            logger.error(f"Failed to create destination directory in container: {mkdir_result.stderr}")
-            return false
+                file_stream = io.BytesIO(file_bytes)
 
-        # Dynamic Command Assembly
-        if os.path.isdir(local_source_path):
-            local_tar_cmd = ["tar", "-czf", "-", "-C", local_source_path, "."]
-        else:
-            local_tar_cmd = ["tar", "-czf", "-", "-C", parent_dir, target_name]
+                # Tar-Eintrag für diese Datei konfigurieren
+                tarinfo = tarfile.TarInfo(name=f["path"])
+                tarinfo.size = len(file_bytes)
+                tarinfo.mtime = int(time.time())
 
-        container_tar_cmd = ["tar", "-xzf", "-", "-C", container_dest_path]
+                # Standardberechtigung setzen: 0755 für Shell-Skripte, sonst 0644
+                default_mode = "0755" if f["path"].endswith(".sh") else "0644"
+                octal_mode = f.get("mode", default_mode)
+                tarinfo.mode = int(octal_mode, 8)
 
-        # Execute the stream
-        local_process = subprocess.Popen(local_tar_cmd, stdout=subprocess.PIPE)
+                tar.addfile(tarinfo, file_stream)
 
-        print(f"Streaming {target_name} to container:{container_dest_path}...")
-        result = container.execute(
-            commands=container_tar_cmd,
-            stdin_payload=local_process.stdout
+        tar_bytes = tar_stream.getvalue()
+
+        # Generator für das Streaming über stdin
+        def tar_stream_generator():
+            yield tar_bytes
+
+        # Den komprimierten Tar-Stream direkt in das Zielverzeichnis extrahieren
+        exit_code, stdout, stderr = container.execute(
+            commands=["tar", "-xzf", "-", "-C", target_dir],
+            stdin_payload=tar_stream_generator(),
+            decode=True
         )
 
-        local_process.wait()
-
-        if result.exit_code != 0:
-            logger.error(f"Failed to extract tar archive: {stderr}")
+        if exit_code != 0:
+            logger.error(f"Failed to extract tar archive inside container: {stderr}")
             return False
 
-        logger.debug(f"File pushed successfully to {container_name}:{container_path}")
+        logger.debug(f"All files successfully deployed into {container_name}:{target_dir}")
         return True
+
     except Exception as e:
-        logger.error(f"Error pushing file to {container_name}: {e}")
+        logger.error(f"Error packing/streaming files to {container_name}: {e}")
         return False
 
 async def pull_file_cmd(container_name: str, container_path: str, host_path: str) -> bool:
@@ -377,16 +385,26 @@ async def run_in_container(name: str, command: str) -> str:
     return result
 
 @server.tool()
-async def push_to_container(container_name: str, local_source_path: str, container_dest_path: str) -> str:
-    """Shiebt eine Datei in den LXD-Container via Tar-Streaming.
+async def push_to_container(container_name: str, files: list[dict], target_dir: str = "/root") -> str:
+    """Schreibt ein oder mehrere Dateien und Ordnerstrukturen direkt in den LXD-Container via Tar-Streaming.
+
     Args:
         container_name: Name des Zielcontainers.
-        local_source_path: Pfad zu lokaler dataei oder directory
-        container_dest_path: Zielpfad im container
+        files: Eine Liste von Dictionaries. Jedes Element benötigt:
+               - 'path': Relativer Zielpfad (z.B. 'src/main.py' oder 'run.sh')
+               - 'content': Klartext-Inhalt oder Base64-String bei Binärdaten
+               - 'is_base64': Boolean, True wenn der Inhalt Base64 kodiert ist
+               - 'mode': Optionaler oktaler Unix-Rechte-String (z.B. '0755' oder '0644')
+        target_dir: Das absolute Ziel-Arbeitsverzeichnis im Container (Standard: '/root').
     """
-    logger.debug(f"push_file called for {container_name}:{container_dest_path}")
-    success = await push_file_cmd(container_name, local_source_path, container_dest_path)
-    result = f"Datei erfolgreich via Tar-Pipeline nach '{container_name}:{container_dest_path}' uebertragen und ausfuehrbar gemacht." if success else f"Fehler beim Uebertragen der Tar-Daten."
+    logger.debug(f"push_file called for {container_name} pointing to {target_dir}")
+    success = await push_file_cmd(container_name, files, target_dir)
+
+    if success:
+        result = f"Dateien erfolgreich via Tar-Pipeline nach '{container_name}:{target_dir}' übertragen."
+    else:
+        result = "Fehler beim Erstellen oder Übertragen der Tar-Daten in den Container."
+
     logger.debug(f"push_file returning: {result}")
     return result
 
