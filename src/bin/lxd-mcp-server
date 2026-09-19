@@ -192,7 +192,7 @@ class LXDManager:
 server = MCPServer("lxd-mcp-server")
 lxd_manager = LXDManager()
 
-def stop_container_cmd(name: str) -> bool:
+async def stop_container_cmd(name: str) -> bool:
     logger.debug(f"Stopping container {name}")
     try:
         container = lxd_manager.client.containers.get(name)
@@ -203,7 +203,7 @@ def stop_container_cmd(name: str) -> bool:
         logger.error(f"Error stopping container {name}: {e}")
         return False
 
-def delete_container_cmd(name: str) -> bool:
+async def delete_container_cmd(name: str) -> bool:
     logger.debug(f"Deleting container {name}")
     try:
         container = lxd_manager.client.containers.get(name)
@@ -214,7 +214,7 @@ def delete_container_cmd(name: str) -> bool:
         logger.error(f"Error deleting container {name}: {e}")
         return False
 
-def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
+async def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
     logger.debug(f"Executing command '{command}' on container {name}")
     try:
         container = lxd_manager.client.containers.get(name)
@@ -227,7 +227,7 @@ def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
         logger.error(f"Error executing command in {name}: {e}")
         return -1, str(e)
 
-def push_file_cmd(container_name: str, file_content: str, container_path: str) -> bool:
+async def push_file_cmd(container_name: str, file_content: str, container_path: str) -> bool:
     logger.debug(f"Pushing file to {container_name}:{container_path}")
     try:
         container = lxd_manager.client.containers.get(container_name)
@@ -275,7 +275,7 @@ def push_file_cmd(container_name: str, file_content: str, container_path: str) -
         logger.error(f"Error pushing file to {container_name}: {e}")
         return False
 
-def pull_file_cmd(container_name: str, container_path: str, host_path: str) -> bool:
+async def pull_file_cmd(container_name: str, container_path: str, host_path: str) -> bool:
     logger.debug(f"Pulling file from {container_name}:{container_path} to {host_path}")
     try:
         container = lxd_manager.client.containers.get(container_name)
@@ -290,7 +290,7 @@ def pull_file_cmd(container_name: str, container_path: str, host_path: str) -> b
         logger.error(f"Error pulling file from {container_name}: {e}")
         return False
 
-def limit_resources_cmd(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
+async def limit_resources_cmd(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
     logger.debug(f"Setting resource limits for {container_name}")
     try:
         container = lxd_manager.client.containers.get(container_name)
@@ -310,7 +310,7 @@ def limit_resources_cmd(container_name: str, cpu: Optional[str] = None, memory: 
         return f"Fehler beim Setzen der Ressourcen-Limits: {e}"
 
 @server.tool()
-def list_containers() -> str:
+async def list_containers() -> str:
     """Listet alle verfuegbaren LXD-Container und deren Status auf."""
     logger.debug("list_containers called")
     try:
@@ -334,7 +334,7 @@ def list_containers() -> str:
         return f"Error listing containers: {e}"
 
 @server.tool()
-def create_container(name: str, image: str = "ubuntu:22.04") -> str:
+async def create_container(name: str, image: str = "ubuntu:22.04") -> str:
     """Erstellt einen neuen LXD-Container mit einem Namen und optionalem Image."""
     logger.debug(f"create_container called for {name}")
     success = lxd_manager.create_container(name, image)
@@ -343,7 +343,7 @@ def create_container(name: str, image: str = "ubuntu:22.04") -> str:
     return result
 
 @server.tool()
-def start_container(name: str) -> str:
+async def start_container(name: str) -> str:
     """Startet einen gestoppten LXD-Container ueber seinen Namen."""
     logger.debug(f"start_container called for {name}")
     success = lxd_manager.start_container(name)
@@ -352,34 +352,34 @@ def start_container(name: str) -> str:
     return result
 
 @server.tool()
-def stop_container(name: str) -> str:
+async def stop_container(name: str) -> str:
     """Stoppt einen laufenden LXD-Container sauber ueber seinen Namen."""
     logger.debug(f"stop_container called for {name}")
-    success = stop_container_cmd(name)
+    success = await stop_container_cmd(name)
     result = f"Container '{name}' wurde erfolgreich gestoppt." if success else f"Fehler beim Stoppen von '{name}'."
     logger.debug(f"stop_container returning: {result}")
     return result
 
 @server.tool()
-def delete_container(name: str) -> str:
+async def delete_container(name: str) -> str:
     """Loescht einen LXD-Container unwiderruflich vom Host (erzwingt den Stopp, falls er laeuft)."""
     logger.debug(f"delete_container called for {name}")
-    success = delete_container_cmd(name)
+    success = await delete_container_cmd(name)
     result = f"Container '{name}' wurde erfolgreich gelöscht." if success else f"Fehler beim Löschen von '{name}'."
     logger.debug(f"delete_container returning: {result}")
     return result
 
 @server.tool()
-def execute_command(name: str, command: str) -> str:
+async def execute_command(name: str, command: str) -> str:
     """Fuehrt einen Linux-Befehl direkt innerhalb des angegebenen Containers aus und gibt das Terminal-Output zurück."""
     logger.debug(f"execute_command called for {name} with command '{command}'")
-    returncode, output = execute_command_cmd(name, command)
+    returncode, output = await execute_command_cmd(name, command)
     result = f"Befehl ausgeführt (Exit Code: {returncode}).\nOutput:\n{output}"
     logger.debug(f"execute_command returning: {result}")
     return result
 
 @server.tool()
-def push_file(container_name: str, file_content: str, container_path: str) -> str:
+async def push_file(container_name: str, file_content: str, container_path: str) -> str:
     """Schreibt einen Text- oder Skriptinhalt direkt in eine Datei innerhalb des LXD-Containers via Tar-Streaming.
     
     Die Datei wird im Container automatisch als ausfuehrbar (chmod +x / 0755) markiert.
@@ -390,25 +390,25 @@ def push_file(container_name: str, file_content: str, container_path: str) -> st
         container_path: Der absolute Zielpfad im Container (z.B. '/tmp/script.sh').
     """
     logger.debug(f"push_file called for {container_name}:{container_path}")
-    success = push_file_cmd(container_name, file_content, container_path)
+    success = await push_file_cmd(container_name, file_content, container_path)
     result = f"Datei erfolgreich via Tar-Pipeline nach '{container_name}:{container_path}' uebertragen und ausfuehrbar gemacht." if success else f"Fehler beim Uebertragen der Tar-Daten."
     logger.debug(f"push_file returning: {result}")
     return result
 
 @server.tool()
-def pull_file(container_name: str, container_path: str, host_path: str) -> str:
+async def pull_file(container_name: str, container_path: str, host_path: str) -> str:
     """Kopiert/Holt eine Datei aus dem angegebenen LXD-Container heraus auf das lokale Host-System."""
     logger.debug(f"pull_file called for {container_name}:{container_path} to {host_path}")
-    success = pull_file_cmd(container_name, container_path, host_path)
+    success = await pull_file_cmd(container_name, container_path, host_path)
     result = f"Datei '{container_name}:{container_path}' erfolgreich nach '{host_path}' kopiert." if success else f"Fehler beim Kopieren der Datei aus dem Container."
     logger.debug(f"pull_file returning: {result}")
     return result
 
 @server.tool()
-def limit_resources(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
+async def limit_resources(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
     """Begrenzt die CPU-Kerne (z.B. '2') und den RAM (z.B. '2GB' oder '512MB') eines LXD-Containers. Gibt an, was geaendert wurde."""
     logger.debug(f"limit_resources called for {container_name}")
-    result = limit_resources_cmd(container_name, cpu, memory)
+    result = await limit_resources_cmd(container_name, cpu, memory)
     logger.debug(f"limit_resources returning: {result}")
     return result
 
