@@ -29,7 +29,7 @@ from mcp.server import MCPServer
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 
-# Configure logging (Umleitung auf stderr, um stdout frei zu halten)
+# Configure logging (redirect to stderr to keep stdout free)
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ class LXDManager:
             logger.error(f"Error starting container {name}: {e}")
             return False
 
-# === 3. SERVER INITIALISIERUNG & TOOLS ===
+# === 3. SERVER INITIALISATION & TOOLS ===
 server = MCPServer("lxd-mcp-server")
 lxd_manager = LXDManager()
 
@@ -233,11 +233,11 @@ async def push_file_cmd(container_name: str, files: list[dict], target_dir: str 
     try:
         container = lxd_manager.client.containers.get(container_name)
 
-        # Tar-Archiv im Arbeitsspeicher (RAM) erstellen
+        # Tar archive in memory (RAM) create
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode='w:gz') as tar:
             for f in files:
-                # Unterscheidung zwischen Text und Base64-Binärdaten
+                # Differentiate between text and Base64 binary data
                 if f.get("is_base64", False):
                     file_bytes = base64.b64decode(f["content"])
                 else:
@@ -245,12 +245,12 @@ async def push_file_cmd(container_name: str, files: list[dict], target_dir: str 
 
                 file_stream = io.BytesIO(file_bytes)
 
-                # Tar-Eintrag für diese Datei konfigurieren
+                # Configure tar entry for this file
                 tarinfo = tarfile.TarInfo(name=f["path"])
                 tarinfo.size = len(file_bytes)
                 tarinfo.mtime = int(time.time())
 
-                # Standardberechtigung setzen: 0755 für Shell-Skripte, sonst 0644
+                # Default permissions: 0755 for shell scripts, otherwise 0644
                 default_mode = "0755" if f["path"].endswith(".sh") else "0644"
                 octal_mode = f.get("mode", default_mode)
                 tarinfo.mode = int(octal_mode, 8)
@@ -259,11 +259,11 @@ async def push_file_cmd(container_name: str, files: list[dict], target_dir: str 
 
         tar_bytes = tar_stream.getvalue()
 
-        # Generator für das Streaming über stdin
+        # Generator for streaming via stdin
         def tar_stream_generator():
             yield tar_bytes
 
-        # Den komprimierten Tar-Stream direkt in das Zielverzeichnis extrahieren
+        # Extract the compressed tar stream directly into the target directory
         exit_code, stdout, stderr = container.execute(
             commands=["tar", "-xzf", "-", "-C", target_dir],
             stdin_payload=tar_stream_generator(),
@@ -308,28 +308,28 @@ async def limit_resources_cmd(container_name: str, cpu: Optional[str] = None, me
             config['limits.memory'] = memory
 
         container.update(config=config, wait=True)
-        result = f"Ressourcen limits für {container_name} aktualisiert"
+        result = f"Resource limits for {container_name} updated"
         logger.debug(f"Resource limits set successfully for {container_name}")
         return result
     except Exception as e:
         logger.error(f"Error limiting resources for {container_name}: {e}")
-        return f"Fehler beim Setzen der Ressourcen-Limits: {e}"
+        return f"Error setting resource limits: {e}"
 
 @server.tool()
 async def list_containers() -> str:
-    """Listet alle verfuegbaren LXD-Container und deren Status auf."""
+    """Lists all available LXD containers and their status."""
     logger.debug("list_containers called")
     try:
         containers = lxd_manager.list_containers()
         logger.debug(f"list_containers returning {len(containers)} containers")
 
         if not containers:
-            result = "Containers: 0 gefunden"
+            result = "Containers: 0 found"
             logger.debug(f"Returning empty result: {result}")
             return result
 
         # Create a simple formatted string to make sure it's compatible
-        result = f"Containers: {len(containers)} gefunden\n"
+        result = f"Containers: {len(containers)} found\n"
         for container in containers:
             result += f"  - {container.name} ({container.status})\n"
         result = result.strip()
@@ -341,85 +341,85 @@ async def list_containers() -> str:
 
 @server.tool()
 async def create_container(name: str, image: str = "ubuntu:22.04") -> str:
-    """Erstellt einen neuen LXD-Container mit einem Namen und optionalem Image."""
+    """Creates a new LXD container with a name and optional image."""
     logger.debug(f"create_container called for {name}")
     success = lxd_manager.create_container(name, image)
-    result = f"Container '{name}' erfolgreich erstellt." if success else f"Fehler beim Erstellen von '{name}'."
+    result = f"Container '{name}' created successfully." if success else f"Error creating '{name}'."
     logger.debug(f"create_container returning: {result}")
     return result
 
 @server.tool()
 async def start_container(name: str) -> str:
-    """Startet einen gestoppten LXD-Container ueber seinen Namen."""
+    """Starts a stopped LXD container by its name."""
     logger.debug(f"start_container called for {name}")
     success = lxd_manager.start_container(name)
-    result = f"Container '{name}' gestartet." if success else f"Fehler beim Starten von '{name}'."
+    result = f"Container '{name}' started." if success else f"Error starting '{name}'."
     logger.debug(f"start_container returning: {result}")
     return result
 
 @server.tool()
 async def stop_container(name: str) -> str:
-    """Stoppt einen laufenden LXD-Container sauber ueber seinen Namen."""
+    """Stops a running LXD container cleanly by its name."""
     logger.debug(f"stop_container called for {name}")
     success = await stop_container_cmd(name)
-    result = f"Container '{name}' wurde erfolgreich gestoppt." if success else f"Fehler beim Stoppen von '{name}'."
+    result = f"Container '{name}' stopped successfully." if success else f"Error stopping '{name}'."
     logger.debug(f"stop_container returning: {result}")
     return result
 
 @server.tool()
 async def delete_container(name: str) -> str:
-    """Loescht einen LXD-Container unwiderruflich vom Host (erzwingt den Stopp, falls er laeuft)."""
+    """Deletes an LXD container irreversibly from the host (forces stop if it's running)."""
     logger.debug(f"delete_container called for {name}")
     success = await delete_container_cmd(name)
-    result = f"Container '{name}' wurde erfolgreich gelöscht." if success else f"Fehler beim Löschen von '{name}'."
+    result = f"Container '{name}' deleted successfully." if success else f"Error deleting '{name}'."
     logger.debug(f"delete_container returning: {result}")
     return result
 
 @server.tool()
 async def run_in_container(name: str, command: str) -> str:
-    """Fuehrt einen Linux-Befehl direkt innerhalb des angegebenen Containers aus und gibt das Terminal-Output zurück."""
+    """Runs a Linux command directly within the specified container and returns the terminal output."""
     logger.debug(f"execute_command called for {name} with command '{command}'")
     returncode, output = await execute_command_cmd(name, command)
-    result = f"Befehl ausgeführt (Exit Code: {returncode}).\nOutput:\n{output}"
+    result = f"Command executed (Exit Code: {returncode}).\nOutput:\n{output}"
     logger.debug(f"execute_command returning: {result}")
     return result
 
 @server.tool()
 async def push_to_container(container_name: str, files: list[dict], target_dir: str = "/root") -> str:
-    """Schreibt ein oder mehrere Dateien und Ordnerstrukturen direkt in den LXD-Container via Tar-Streaming.
+    """Writes one or more files and folder structures directly into the LXD container via tar-streaming.
 
     Args:
-        container_name: Name des Zielcontainers.
-        files: Eine Liste von Dictionaries. Jedes Element benötigt:
-               - 'path': Relativer Zielpfad (z.B. 'src/main.py' oder 'run.sh')
-               - 'content': Klartext-Inhalt oder Base64-String bei Binärdaten
-               - 'is_base64': Boolean, True wenn der Inhalt Base64 kodiert ist
-               - 'mode': Optionaler oktaler Unix-Rechte-String (z.B. '0755' oder '0644')
-        target_dir: Das absolute Ziel-Arbeitsverzeichnis im Container (Standard: '/root').
+        container_name: Name of the target container.
+        files: A list of dictionaries. Each element requires:
+               - 'path': Relative target path (e.g., 'src/main.py' or 'run.sh')
+               - 'content': Plaintext content or Base64 string for binary data
+               - 'is_base64': Boolean, True if content is Base64 encoded
+               - 'mode': Optional octal Unix permission string (e.g., '0755' or '0644')
+        target_dir: The absolute target working directory in the container (default: '/root').
     """
     logger.debug(f"push_file called for {container_name} pointing to {target_dir}")
     success = await push_file_cmd(container_name, files, target_dir)
 
     if success:
-        result = f"Dateien erfolgreich via Tar-Pipeline nach '{container_name}:{target_dir}' übertragen."
+        result = f"Files successfully transferred via tar-pipeline to '{container_name}:{target_dir}'."
     else:
-        result = "Fehler beim Erstellen oder Übertragen der Tar-Daten in den Container."
+        result = "Error creating or transferring tar data to the container."
 
     logger.debug(f"push_file returning: {result}")
     return result
 
 @server.tool()
 async def pull_from_container(container_name: str, container_path: str, host_path: str) -> str:
-    """Kopiert/Holt eine Datei aus dem angegebenen LXD-Container heraus auf das lokale Host-System."""
+    """Copies/fetches a file from the specified LXD container to the local host system."""
     logger.debug(f"pull_file called for {container_name}:{container_path} to {host_path}")
     success = await pull_file_cmd(container_name, container_path, host_path)
-    result = f"Datei '{container_name}:{container_path}' erfolgreich nach '{host_path}' kopiert." if success else f"Fehler beim Kopieren der Datei aus dem Container."
+    result = f"File '{container_name}:{container_path}' copied successfully to '{host_path}'." if success else f"Error copying file from container."
     logger.debug(f"pull_file returning: {result}")
     return result
 
 @server.tool()
 async def limit_container_resources(container_name: str, cpu: Optional[str] = None, memory: Optional[str] = None) -> str:
-    """Begrenzt die CPU-Kerne (z.B. '2') und den RAM (z.B. '2GB' oder '512MB') eines LXD-Containers. Gibt an, was geaendert wurde."""
+    """Limits the CPU cores (e.g., '2') and RAM (e.g., '2GB' or '512MB') of an LXD container. Indicates what was changed."""
     logger.debug(f"limit_resources called for {container_name}")
     result = await limit_resources_cmd(container_name, cpu, memory)
     logger.debug(f"limit_resources returning: {result}")
@@ -431,8 +431,8 @@ def main():
     debug_mode = get_debug_mode_from_config()
     setup_logging(debug_mode)
 
-    # Startet automatisch den unbuffered Stdio-Transport des SDK v2 
-    # und regelt das Event-Loop-Handling komplett fehlerfrei von selbst.
+    # Starts automatically the unbuffered Stdio-transport of SDK v2
+    # and handles the event-loop completely reliably by itself.
     logger.debug("Starting MCP server")
 
     # Also let's add some direct JSON reading to see what's coming in
@@ -444,4 +444,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
