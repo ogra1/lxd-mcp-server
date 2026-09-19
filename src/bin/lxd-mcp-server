@@ -221,7 +221,7 @@ async def execute_command_cmd(name: str, command: str) -> tuple[int, str]:
         container = lxd_manager.client.containers.get(name)
         # Split the command into a list of arguments
         command_list = ["/bin/bash", "-c", command ]
-        result = container.execute(command_list)
+        result = await asyncio.to_thread(container.execute, command_list)
         logger.debug(f"Command executed successfully with exit code {result.exit_code}")
         return result.exit_code, result.stdout + result.stderr
     except Exception as e:
