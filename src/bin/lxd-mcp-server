@@ -49,9 +49,9 @@ DEBUG_MODE = False
 def setup_logging(debug_mode=False):
     """Setup logging based on debug configuration"""
     global logger, DEBUG_MODE
-    
+
     DEBUG_MODE = debug_mode
-    
+
     if debug_mode:
         logger.setLevel(logging.DEBUG)
         # Set all loggers to debug level if needed
@@ -430,14 +430,14 @@ def main():
     # Check for debug mode from configuration
     debug_mode = get_debug_mode_from_config()
     setup_logging(debug_mode)
-    
+
     # Startet automatisch den unbuffered Stdio-Transport des SDK v2 
     # und regelt das Event-Loop-Handling komplett fehlerfrei von selbst.
     logger.debug("Starting MCP server")
-    
+
     # Also let's add some direct JSON reading to see what's coming in
     logger.debug("Server starting - ready to receive JSON-RPC messages...")
-    
+
     # This is the key - let's override the default behavior to add very explicit logging
     # of input messages
     server.run(transport="stdio")
