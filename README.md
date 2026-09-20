@@ -15,10 +15,9 @@
     - start_container (fires up the named container)
     - stop_container (stops the named container)
     - execute_command (runs a command inside the container)
-    - push_file (copies files into the container)
-    - pull_file (copies files out of the container)
-    - limit_resources (allows to limit ram and cpu usage for a container)
-
+    - push_to_container (copies single files into the container)
+    - pull_from_container (copies single files out of the container)
+   
   There are also two config options you can use with snap set:
   
     - port (defaults to 8005)
