@@ -74,26 +74,10 @@ parts:
       - libssl-dev
       - python3.14-venv
     stage-packages:
-      - python3-pip
-      - python3-dev
-      - build-essential
-      - libffi-dev
-      - libssl-dev
-      - python3.14-venv
+      - python3-venv
     python-packages:
       - pylxd
       - mcp
-      - mcp-types
-      - anyio
-      - httpx2
-      - jsonschema
-      - opentelemetry-api
-      - pydantic
-      - python-multipart
-      - sse-starlette
-      - starlette
-      - typing-inspection
-      - uvicorn
 
   lxd-mcp-server:
     plugin: dump
