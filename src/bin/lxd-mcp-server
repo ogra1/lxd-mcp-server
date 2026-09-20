@@ -262,7 +262,7 @@ async def delete_container(name: str) -> TextContent:
         return TextContent(type="text", text=f"❌ **Error deleting container `{name}`:** {e}")
 
 @mcp.tool()
-async def run_in_container(name: str, command: str, ctx: Context) -> TextContent:
+async def run_in_container(name: str, command: str) -> TextContent:
     """Execute a shell command inside a specific running container with live UI feedback.
 
     Args:
@@ -285,27 +285,18 @@ async def run_in_container(name: str, command: str, ctx: Context) -> TextContent
             "HOME": "/root"
         }
 
-        await ctx.report_progress(
-            progress=0.0,
-            total=1.0,
-            message=f"Starting command in '{name}'... This might take a while for builds or updates."
-        )
-
         cmd_args = ["sh", "-c", command]
 
-        await ctx.report_progress(
-            progress=0.5,
-            total=1.0,
-            message=f"Running: '{command}'. Waiting for execution to complete..."
-        )
+        await asyncio.sleep(0.05)
 
-        result = container.execute(cmd_args, environment=execution_env)
+        try:
+            result = await asyncio.to_thread(
+                container.execute, cmd_args, environment=execution_env
+            )
+        except asyncio.CancelledError:
+            logger.warning(f"Command execution cancelled by the UI client while running: '{command}'")
 
-        await ctx.report_progress(
-            progress=1.0,
-            total=1.0,
-            message="Execution finished. Formatting output..."
-        )
+            raise
 
         # Output formating
         markdown = f"### Command Execution Result\n"
@@ -316,7 +307,6 @@ async def run_in_container(name: str, command: str, ctx: Context) -> TextContent
             markdown += f"**Stdout:**\n```bash\n{result.stdout.strip()}\n```\n"
         if result.stderr:
             markdown += f"**Stderr:**\n```bash\n{result.stderr.strip()}\n```\n"
-
         if not result.stdout and not result.stderr:
             markdown += "*(Command produced no output)*\n"
 
