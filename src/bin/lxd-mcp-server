@@ -194,7 +194,8 @@ async def list_containers(ctx: Context) -> TextContent:
 
 @mcp.tool()
 async def create_container(name: str, image: str = "ubuntu:26.04") -> TextContent:
-    """Create a new LXD container from a specified Ubuntu image release.
+    """Create a new LXD container from a specified Ubuntu image release. The created container
+    provides a complete Ubuntu installation with no limitations.
 
     Args:
         name: The unique name for the new container.
@@ -264,6 +265,9 @@ async def delete_container(name: str) -> TextContent:
 @mcp.tool()
 async def run_in_container(name: str, command: str) -> TextContent:
     """Execute a shell command inside a specific running container with live UI feedback.
+    You are root inside the container. The container provides a fully working Ubuntu installation
+    with no restrictions or environmental limitations. All tools are available or installable from
+    the Ubuntu archive or the snap store as needed.
 
     Args:
         name: The name of the target container.
@@ -359,7 +363,7 @@ async def push_to_container(name: str, container_path: str, content: str) -> Tex
 
 @mcp.tool()
 async def pull_from_container(name: str, container_path: str) -> TextContent:
-    """Pull/read the contents of a file from a specific container path.
+    """Pull/read the contents of a file from a specific container path into your local storage.
 
     Args:
         name: The name of the target container.
@@ -399,86 +403,6 @@ async def pull_from_container(name: str, container_path: str) -> TextContent:
     except Exception as e:
         logger.error(f"Failed to pull file from container {name}: {e}")
         return TextContent(type="text", text=f"❌ **Failed to pull file:** {str(e)}")
-
-    """Push multiple files into a container path using a JSON map (supports text and base64 binaries).
-
-    Args:
-        name: The name of the target container.
-        container_target_dir: The absolute base path inside the container.
-        files_data: JSON string mapping paths to a dict: '{"src/logo.png": {"content": "iVBORw...", "encoding": "base64"}, "index.js": {"content": "console.log()", "encoding": "text"}}'
-    """
-    try:
-        container = lxd_manager.client.containers.get(name)
-        if container.status != "Running":
-            return TextContent(type="text", text=f"❌ **Error:** Container '{name}' is not running.")
-
-        file_map = json.loads(files_data)
-        count = 0
-
-        for rel_path, file_info in file_map.items():
-            full_container_path = os.path.normpath(os.path.join(container_target_dir, rel_path))
-            if not full_container_path.startswith(container_target_dir):
-                continue
-
-            parent_dir = os.path.dirname(full_container_path)
-            if parent_dir and parent_dir != "/":
-                container.execute(["mkdir", "-p", parent_dir])
-
-            raw_content = file_info.get("content", "")
-            encoding = file_info.get("encoding", "text")
-
-            if encoding == "base64":
-                file_payload = base64.b64decode(raw_content)
-            else:
-                file_payload = raw_content
-
-            container.files.put(full_container_path, file_payload)
-            count += 1
-
-        return TextContent(type="text", text=f"📂 Successfully deployed {count} files (including binaries) to `{container_target_dir}`.")
-    except Exception as e:
-        return TextContent(type="text", text=f"❌ **Directory push failed:** {str(e)}")
-
-    """Read a directory tree from a container, automatically encoding binaries as base64.
-
-    Args:
-        name: The name of the target container.
-        container_source_dir: The absolute path of the directory inside the container.
-    """
-    try:
-        container = lxd_manager.client.containers.get(name)
-        if container.status != "Running":
-            return TextContent(type="text", text=f"❌ **Error:** Container '{name}' is not running.")
-
-        res = container.execute(["sh", "-c", f"find {container_source_dir} -type f"])
-        if res.exit_code != 0:
-            return TextContent(type="text", text=f"❌ **Error:** Failed to read directory.")
-
-        file_list = res.stdout.strip().split("\n")
-        result_map = {}
-
-        for file_path in file_list:
-            if not file_path:
-                continue
-            try:
-                file_bytes = container.files.get(file_path)
-                rel_path = os.path.relpath(file_path, container_source_dir)
-
-                try:
-                    text_content = file_bytes.decode('utf-8')
-                    result_map[rel_path] = {"content": text_content, "encoding": "text"}
-                except UnicodeDecodeError:
-                    b64_content = base64.b64encode(file_bytes).decode('utf-8')
-                    result_map[rel_path] = {"content": b64_content, "encoding": "base64"}
-            except Exception:
-                continue
-
-        markdown = f"### 📥 Directory Tree Retrieved (Binaries encoded as Base64)\n\n```json\n"
-        markdown += json.dumps(result_map, indent=2)
-        markdown += "\n```"
-        return TextContent(type="text", text=markdown)
-    except Exception as e:
-        return TextContent(type="text", text=f"❌ **Directory pull failed:** {str(e)}")
 
 # === 3. RUN THE SERVER ===
 if __name__ == "__main__":
